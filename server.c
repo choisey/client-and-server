@@ -217,7 +217,9 @@ int main()
     int max_socket_fd = listen_socket;
 
     fd_set current_sockets;
-    fd_set ready_sockets;
+    fd_set read_fds;
+    fd_set write_fds;
+    fd_set except_fds;
 
     FD_ZERO(&current_sockets);
     FD_SET(listen_socket, &current_sockets);
@@ -225,12 +227,11 @@ int main()
     while ( 1 )
     {
         // select is destructive
-        ready_sockets = current_sockets;
+        read_fds = current_sockets;
+        write_fds = current_sockets;
+        except_fds = current_sockets;
 
-        // TODO
-        // 1. write_sockets and exception_sockets as well as read_sockets
-        // 2. set max sock instead of mindlessly FD_SETSIZE
-        if ( -1 == select(max_socket_fd, &ready_sockets, NULL, NULL, NULL) )
+        if ( -1 == select(max_socket_fd + 1, &read_fds, &write_fds, &except_fds, NULL) )
         {
             switch ( errno )
             {
@@ -259,113 +260,125 @@ int main()
             }
         }
 
-        for ( int i = min_socket_fd; i <= max_socket_fd; i++ )
+        // TODO
+        // we can keep the list of active sockets instead of iterating from min_ to max_
+        for ( int fd = min_socket_fd; fd <= max_socket_fd; fd++ )
         {
-            if ( FD_ISSET(i, &ready_sockets) )
+            if ( fd == listen_socket && FD_ISSET(fd, &read_fds) )
             {
-                if ( i == listen_socket )
+                socklen_t addr_size = sizeof(struct sockaddr_in);
+                struct sockaddr_in client_addr;
+                int client_socket = accept(listen_socket, (struct sockaddr*) &client_addr, &addr_size);
+                if ( -1 == client_socket )
                 {
-                    socklen_t addr_size = sizeof(struct sockaddr_in);
-                    struct sockaddr_in client_addr;
-                    int client_socket = accept(listen_socket, (struct sockaddr*) &client_addr, &addr_size);
-                    if ( -1 == client_socket )
+                    switch ( errno )
                     {
-                        switch ( errno )
-                        {
-                            case EWOULDBLOCK:
-                                // The socket is marked nonblocking and no connections are
-                                // present to be accepted.  POSIX.1-2001 and POSIX.1-2008
-                                // allow either error to be returned for this case, and do
-                                // not require these constants to have the same value, so a
-                                // portable application should check for both possibilities.
+                        case EWOULDBLOCK:
+                            // The socket is marked nonblocking and no connections are
+                            // present to be accepted.  POSIX.1-2001 and POSIX.1-2008
+                            // allow either error to be returned for this case, and do
+                            // not require these constants to have the same value, so a
+                            // portable application should check for both possibilities.
 
-                            case EBADF:
-                                // sockfd is not an open file descriptor.
+                        case EBADF:
+                            // sockfd is not an open file descriptor.
 
-                            case ECONNABORTED:
-                                // A connection has been aborted.
+                        case ECONNABORTED:
+                            // A connection has been aborted.
 
-                            case EFAULT:
-                                // The addr argument is not in a writable part of the user
-                                // address space.
+                        case EFAULT:
+                            // The addr argument is not in a writable part of the user
+                            // address space.
 
-                            case EINTR:
-                                // The system call was interrupted by a signal that was
-                                //caught before a valid connection arrived; see signal(7).
+                        case EINTR:
+                            // The system call was interrupted by a signal that was
+                            //caught before a valid connection arrived; see signal(7).
 
-                            case EINVAL:
-                                // Socket is not listening for connections, or addrlen is
-                                // invalid (e.g., is negative).
+                        case EINVAL:
+                            // Socket is not listening for connections, or addrlen is
+                            // invalid (e.g., is negative).
 
-                                // (accept4()) invalid value in flags.
-                                // The per-process limit on the number of open file
-                                // descriptors has been reached.
+                            // (accept4()) invalid value in flags.
+                            // The per-process limit on the number of open file
+                            // descriptors has been reached.
 
-                            case ENFILE:
-                                // The system-wide limit on the total number of open files
-                                // has been reached.
+                        case ENFILE:
+                            // The system-wide limit on the total number of open files
+                            // has been reached.
 
-                            case ENOBUFS:
-                            case ENOMEM:
-                                // Not enough free memory.  This often means that the memory
-                                // allocation is limited by the socket buffer limits, not by
-                                // the system memory.
+                        case ENOBUFS:
+                        case ENOMEM:
+                            // Not enough free memory.  This often means that the memory
+                            // allocation is limited by the socket buffer limits, not by
+                            // the system memory.
 
-                            case ENOTSOCK:
-                                // The file descriptor sockfd does not refer to a socket.
+                        case ENOTSOCK:
+                            // The file descriptor sockfd does not refer to a socket.
 
-                            case EOPNOTSUPP:
-                                // The referenced socket is not of type SOCK_STREAM.
+                        case EOPNOTSUPP:
+                            // The referenced socket is not of type SOCK_STREAM.
 
-                            case EPERM:
-                                // Firewall rules forbid connection.
+                        case EPERM:
+                            // Firewall rules forbid connection.
 
-                            case EPROTO:
-                                // Protocol error.
+                        case EPROTO:
+                            // Protocol error.
 
-                            default:
-                                fprintf(stderr, "socket accept error\n");
-                                exit(1);
-                        }
-                    }
-
-                    if ( client_socket < min_socket_fd )
-                        min_socket_fd = client_socket;
-
-                    if ( max_socket_fd < client_socket )
-                        max_socket_fd = client_socket;
-
-                    FD_SET(client_socket, &current_sockets);
-                }
-                else
-                {
-                    char buffer[BUFLEN];
-                    size_t msgsize = 0;
-                    ssize_t bytes_read;
-
-                    while ( 0 < ( bytes_read = recv(i, buffer, sizeof(buffer) - 1, MSG_DONTWAIT) ) )
-                    {
-                        *(buffer + bytes_read) = '\0';
-                        msgsize += bytes_read;
-                        printf("%s", buffer);
-                    }
-
-                    if ( -1 == bytes_read )
-                    {
-                        if ( EAGAIN != errno && EWOULDBLOCK != errno )
-                        {
-                            fprintf(stderr, "socket recv error\n");
-                            FD_CLR(i, &current_sockets);
-                        }
-                    }
-
-                    if ( 0 == msgsize )
-                    {
-                        // When a stream socket peer has performed an orderly shutdown,
-                        // the return value will be 0 (the traditional "end-of-file" return).
-                        FD_CLR(i, &current_sockets);
+                        default:
+                            fprintf(stderr, "socket accept error\n");
+                            exit(1);
                     }
                 }
+
+                if ( client_socket < min_socket_fd )
+                    min_socket_fd = client_socket;
+
+                if ( max_socket_fd < client_socket )
+                    max_socket_fd = client_socket;
+
+                FD_SET(client_socket, &current_sockets);
+
+                continue;
+            }
+
+            if ( FD_ISSET(fd, &read_fds) )
+            {
+                char buffer[BUFLEN];
+                size_t msgsize = 0;
+                ssize_t bytes_read;
+
+                while ( 0 < ( bytes_read = recv(fd, buffer, sizeof(buffer) - 1, MSG_DONTWAIT) ) )
+                {
+                    *(buffer + bytes_read) = '\0';
+                    msgsize += bytes_read;
+                    printf("%s", buffer);
+                }
+
+                if ( -1 == bytes_read )
+                {
+                    if ( EAGAIN != errno && EWOULDBLOCK != errno )
+                    {
+                        fprintf(stderr, "socket recv error\n");
+                        FD_CLR(fd, &current_sockets);
+                    }
+                }
+
+                if ( 0 == msgsize )
+                {
+                    // When a stream socket peer has performed an orderly shutdown,
+                    // the return value will be 0 (the traditional "end-of-file" return).
+                    FD_CLR(fd, &current_sockets);
+                }
+            }
+
+            if ( FD_ISSET(fd, &write_fds) )
+            {
+                // socket is ready for writing
+            }
+
+            if ( FD_ISSET(fd, &except_fds) )
+            {
+                // exceptional condition
             }
         }
     }
