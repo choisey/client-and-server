@@ -213,6 +213,9 @@ int main()
     // sigaddset(&pselect_set, SIGQUIT);
     // sigaddset(&pselect_set, SIGTERM);
 
+    int min_socket_fd = listen_socket;
+    int max_socket_fd = listen_socket;
+
     fd_set current_sockets;
     fd_set ready_sockets;
 
@@ -227,7 +230,7 @@ int main()
         // TODO
         // 1. write_sockets and exception_sockets as well as read_sockets
         // 2. set max sock instead of mindlessly FD_SETSIZE
-        if ( -1 == select(FD_SETSIZE, &ready_sockets, NULL, NULL, NULL) )
+        if ( -1 == select(max_socket_fd, &ready_sockets, NULL, NULL, NULL) )
         {
             switch ( errno )
             {
@@ -256,9 +259,7 @@ int main()
             }
         }
 
-        // TODO don't iterate all FD_SETSIZE number of connections
-        // keep the active connections elsewhere
-        for ( int i = 0; i < FD_SETSIZE; i++ )
+        for ( int i = min_socket_fd; i <= max_socket_fd; i++ )
         {
             if ( FD_ISSET(i, &ready_sockets) )
             {
@@ -327,6 +328,12 @@ int main()
                                 exit(1);
                         }
                     }
+
+                    if ( client_socket < min_socket_fd )
+                        min_socket_fd = client_socket;
+
+                    if ( max_socket_fd < client_socket )
+                        max_socket_fd = client_socket;
 
                     FD_SET(client_socket, &current_sockets);
                 }
