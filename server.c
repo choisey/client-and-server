@@ -1,3 +1,7 @@
+/*
+ * A TCP server that manages client connections and handles all read and write operations
+ * in a single thread by using socket select.
+ */
 #include <errno.h>
 #include <stdio.h>
 #include <netinet/in.h> // struct sockaddr_in
@@ -58,7 +62,7 @@ void signal_handler(int signo)
     // 31 SIGSYS     Dump        Bad system call                      No
     // 31 SIGUNUSED  Dump        Equivalent to SIGSYS                 No
 
-    fprintf(stderr, "signal received: %d\n", signo);
+    //fprintf(stderr, "signal received: %d\n", signo);
 }
 
 int main()
@@ -264,79 +268,82 @@ int main()
         // we can keep the list of active sockets instead of iterating from min_ to max_
         for ( int fd = min_socket_fd; fd <= max_socket_fd; fd++ )
         {
-            if ( fd == listen_socket && FD_ISSET(fd, &read_fds) )
+            if ( fd == listen_socket )
             {
-                socklen_t addr_size = sizeof(struct sockaddr_in);
-                struct sockaddr_in client_addr;
-                int client_socket = accept(listen_socket, (struct sockaddr*) &client_addr, &addr_size);
-                if ( -1 == client_socket )
+                if ( FD_ISSET(fd, &read_fds) )
                 {
-                    switch ( errno )
+                    socklen_t addr_size = sizeof(struct sockaddr_in);
+                    struct sockaddr_in client_addr;
+                    int client_socket = accept(listen_socket, (struct sockaddr*) &client_addr, &addr_size);
+                    if ( -1 == client_socket )
                     {
-                        case EWOULDBLOCK:
-                            // The socket is marked nonblocking and no connections are
-                            // present to be accepted.  POSIX.1-2001 and POSIX.1-2008
-                            // allow either error to be returned for this case, and do
-                            // not require these constants to have the same value, so a
-                            // portable application should check for both possibilities.
+                        switch ( errno )
+                        {
+                            case EWOULDBLOCK:
+                                // The socket is marked nonblocking and no connections are
+                                // present to be accepted.  POSIX.1-2001 and POSIX.1-2008
+                                // allow either error to be returned for this case, and do
+                                // not require these constants to have the same value, so a
+                                // portable application should check for both possibilities.
 
-                        case EBADF:
-                            // sockfd is not an open file descriptor.
+                            case EBADF:
+                                // sockfd is not an open file descriptor.
 
-                        case ECONNABORTED:
-                            // A connection has been aborted.
+                            case ECONNABORTED:
+                                // A connection has been aborted.
 
-                        case EFAULT:
-                            // The addr argument is not in a writable part of the user
-                            // address space.
+                            case EFAULT:
+                                // The addr argument is not in a writable part of the user
+                                // address space.
 
-                        case EINTR:
-                            // The system call was interrupted by a signal that was
-                            //caught before a valid connection arrived; see signal(7).
+                            case EINTR:
+                                // The system call was interrupted by a signal that was
+                                //caught before a valid connection arrived; see signal(7).
 
-                        case EINVAL:
-                            // Socket is not listening for connections, or addrlen is
-                            // invalid (e.g., is negative).
+                            case EINVAL:
+                                // Socket is not listening for connections, or addrlen is
+                                // invalid (e.g., is negative).
 
-                            // (accept4()) invalid value in flags.
-                            // The per-process limit on the number of open file
-                            // descriptors has been reached.
+                                // (accept4()) invalid value in flags.
+                                // The per-process limit on the number of open file
+                                // descriptors has been reached.
 
-                        case ENFILE:
-                            // The system-wide limit on the total number of open files
-                            // has been reached.
+                            case ENFILE:
+                                // The system-wide limit on the total number of open files
+                                // has been reached.
 
-                        case ENOBUFS:
-                        case ENOMEM:
-                            // Not enough free memory.  This often means that the memory
-                            // allocation is limited by the socket buffer limits, not by
-                            // the system memory.
+                            case ENOBUFS:
+                            case ENOMEM:
+                                // Not enough free memory.  This often means that the memory
+                                // allocation is limited by the socket buffer limits, not by
+                                // the system memory.
 
-                        case ENOTSOCK:
-                            // The file descriptor sockfd does not refer to a socket.
+                            case ENOTSOCK:
+                                // The file descriptor sockfd does not refer to a socket.
 
-                        case EOPNOTSUPP:
-                            // The referenced socket is not of type SOCK_STREAM.
+                            case EOPNOTSUPP:
+                                // The referenced socket is not of type SOCK_STREAM.
 
-                        case EPERM:
-                            // Firewall rules forbid connection.
+                            case EPERM:
+                                // Firewall rules forbid connection.
 
-                        case EPROTO:
-                            // Protocol error.
+                            case EPROTO:
+                                // Protocol error.
 
-                        default:
-                            fprintf(stderr, "socket accept error\n");
-                            exit(1);
+                            default:
+                                fprintf(stderr, "socket accept error\n");
+                                exit(1);
+                        }
                     }
+
+                    if ( client_socket < min_socket_fd )
+                        min_socket_fd = client_socket;
+
+                    if ( max_socket_fd < client_socket )
+                        max_socket_fd = client_socket;
+
+                    FD_SET(client_socket, &current_sockets);
                 }
-
-                if ( client_socket < min_socket_fd )
-                    min_socket_fd = client_socket;
-
-                if ( max_socket_fd < client_socket )
-                    max_socket_fd = client_socket;
-
-                FD_SET(client_socket, &current_sockets);
 
                 continue;
             }
@@ -351,7 +358,12 @@ int main()
                 {
                     *(buffer + bytes_read) = '\0';
                     msgsize += bytes_read;
-                    printf("%s", buffer);
+                    for ( char* c = buffer; *c != '\0'; c++ )
+                    {
+                        if ( *c < ' ' ) *c = '.';
+                    }
+                    printf("%d(%s)", fd, buffer);
+                    fflush(stdout);
                 }
 
                 if ( -1 == bytes_read )
