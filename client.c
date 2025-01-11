@@ -4,6 +4,7 @@
  */
 #include <arpa/inet.h> // inet_addr()
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h> // exit()
 #include <unistd.h> // read(), write(), close()
@@ -77,8 +78,75 @@ int main(int argc, char* argv[])
 
             if ( -1 == connect(sockfd, (struct sockaddr*) &servaddr, sizeof(servaddr) ))
             {
-                fprintf(stderr, "socket connec error\n");
-                exit(1);
+                switch ( errno )
+                {
+
+                    case EADDRNOTAVAIL:
+                    case EAFNOSUPPORT:
+                    case EALREADY:
+                    case EBADF:
+                    case ECONNREFUSED:
+                    case EINPROGRESS:
+                    case EINTR:
+                    case EISCONN:
+                    case ENETUNREACH:
+                    case ENOTSOCK:
+                    case EPROTOTYPE:
+                    case ETIMEDOUT:
+                    case EIO:
+                    case ENOENT:
+                    case ENOTDIR:
+                    case EACCES:
+                    case EADDRINUSE:
+                    case ECONNRESET:
+                    case EHOSTUNREACH:
+                    case EINVAL:
+                    case ELOOP:
+                    case ENAMETOOLONG:
+                    case ENETDOWN:
+                    case ENOBUFS:
+                    case EOPNOTSUPP :
+                    default:
+                        fprintf(stderr, "select connect error\n");
+                        exit(1);
+                }
+            }
+
+            int flags = fcntl(sockfd, F_GETFL, 0);
+            if ( -1 == flags )
+            {
+                switch ( errno )
+                {
+                    case EACCES:
+                    case EAGAIN:
+                    case EBADF:
+                    case EINTR:
+                    case EINVAL:
+                    case EMFILE:
+                    case ENOLCK:
+                    case EOVERFLOW:
+                    default:
+                        fprintf(stderr, "select fcntl error\n");
+                        exit(1);
+                }
+            }
+
+            if ( -1 == fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) )
+            {
+                switch ( errno )
+                {
+                    case EACCES:
+                    case EAGAIN:
+                    case EBADF:
+                    case EINTR:
+                    case EINVAL:
+                    case EMFILE:
+                    case ENOLCK:
+                    case EOVERFLOW:
+                    default:
+                        fprintf(stderr, "select fcntl error\n");
+                        exit(1);
+                }
             }
 
             fds[conn_cnt] = fp;
@@ -136,25 +204,46 @@ int main(int argc, char* argv[])
                     // Unable to allocate memory for internal tables.
 
                 default:
-                    fprintf(stderr, "select error\n");
+                    fprintf(stderr, "socket select error\n");
                     exit(1);
             }
         }
 
-        // TODO
-        // use fcntl(O_NONBLOCK) instead of send(..., MSG_DONTWAIT)
-        //int flags = fcntl(fd, F_GETFL, 0);
-        //fcntl(fd, F_SETFL, flags | O_NONBLOCK);
         for ( int i = 0; i < conn_cnt; i++ )
         {
             if ( FD_ISSET(connfds[i], &write_fds) )
             {
-                char bb[BUFLEN];
+                char buffer[BUFLEN];
                 size_t bytes_read;
-                bytes_read = fread(bb, sizeof(char), sizeof(bb), fds[i]);
+                bytes_read = fread(buffer, sizeof(char), sizeof(buffer), fds[i]);
                 if ( 0 != bytes_read )
                 {
-                    /*int bytes_sent =*/ send(connfds[i], bb, bytes_read, MSG_DONTWAIT);
+                    int bytes_sent = send(connfds[i], buffer, bytes_read);
+                    if ( -1 == bytes_sent )
+                    {
+                        switch ( errno )
+                        {
+                            case EACCES:
+                            case EWOULDBLOCK:
+                            case EBADF:
+                            case ECONNRESET:
+                            case EDESTADDRREQ:
+                            case EFAULT:
+                            case EINTR:
+                            case EINVAL:
+                            case EISCONN:
+                            case EMSGSIZE:
+                            case ENOBUFS:
+                            case ENOMEM:
+                            case ENOTCONN:
+                            case ENOTSOCK:
+                            case EOPNOTSUPP:
+                            case EPIPE:
+                            default:
+                                fprintf(stderr, "socket send error\n");
+                                exit(1);
+                        }
+                    }
                 }
                 else
                 {
