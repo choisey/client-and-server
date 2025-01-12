@@ -115,7 +115,6 @@ int main()
                 fprintf(stderr, "socket creation error\n");
                 exit(1);
         }
-
     }
 
     int reuse = 1;
@@ -358,11 +357,11 @@ int main()
                 {
                     *(buffer + bytes_read) = '\0';
                     msgsize += bytes_read;
-                    for ( char* c = buffer; *c != '\0'; c++ )
+                    for ( int i = 0; i < bytes_read; i++ )
                     {
-                        if ( *c < ' ' ) *c = '.';
+                        if ( buffer[i] == '\0' ) buffer[i] = '.';
                     }
-                    printf("%d(%s)", fd, buffer);
+                    printf("%s", buffer);
                     fflush(stdout);
                 }
 
