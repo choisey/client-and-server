@@ -112,7 +112,7 @@ int main()
                 // supported within this domain.
 
             default:
-                fprintf(stderr, "socket creation error\n");
+                fprintf(stderr, "socket creation error (%d)\n", errno);
                 exit(1);
         }
     }
@@ -131,7 +131,7 @@ int main()
             case ENOMEM:
             case ENOBUFS:
             default:
-                fprintf(stderr, "socket setsockopt error\n");
+                fprintf(stderr, "socket setsockopt error (%d)\n", errno);
                 exit(1);
         }
     }
@@ -172,7 +172,7 @@ int main()
                 // The file descriptor sockfd does not refer to a socket.
 
             default:
-                fprintf(stderr, "socket bind error\n");
+                fprintf(stderr, "socket bind error (%d)\n", errno);
                 exit(1);
         }
 
@@ -202,7 +202,7 @@ int main()
                 // operation.
 
             default:
-                fprintf(stderr, "socket listen error\n");
+                fprintf(stderr, "socket listen error (%d)\n", errno);
                 exit(1);
         }
     }
@@ -258,7 +258,7 @@ int main()
                     // Unable to allocate memory for internal tables.
 
                 default:
-                    fprintf(stderr, "select error\n");
+                    fprintf(stderr, "socket select error (%d)\n", errno);
                     exit(1);
             }
         }
@@ -330,7 +330,7 @@ int main()
                                 // Protocol error.
 
                             default:
-                                fprintf(stderr, "socket accept error\n");
+                                fprintf(stderr, "socket accept error (%d)\n", errno);
                                 exit(1);
                         }
                     }
@@ -369,8 +369,9 @@ int main()
                 {
                     if ( EAGAIN != errno && EWOULDBLOCK != errno )
                     {
-                        fprintf(stderr, "socket recv error\n");
+                        fprintf(stderr, "socket recv error (%d)\n", errno);
                         FD_CLR(fd, &current_sockets);
+                        close(fd);
                     }
                 }
 
@@ -379,6 +380,7 @@ int main()
                     // When a stream socket peer has performed an orderly shutdown,
                     // the return value will be 0 (the traditional "end-of-file" return).
                     FD_CLR(fd, &current_sockets);
+                    close(fd);
                 }
             }
 
