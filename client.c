@@ -14,6 +14,31 @@
 #define HOST "127.0.0.1"
 #define MAX_CONN 20
 
+struct connection_ctx
+{
+    int socket_fd;
+    FILE* fp;
+    char buffer[BUFLEN];
+    struct connection_ctx *next;
+};
+
+void clear_connection_ctx_list(struct connection_ctx *head)
+{
+    while ( NULL != head )
+    {
+        struct connection_ctx *next = head->next;
+
+        if ( 0 != head->socket_fd )
+            close(head->socket_fd);
+
+        if ( NULL != head->fp )
+            fclose(head->fp);
+
+        free(head);
+        head = next;
+    }
+}
+
 int main(int argc, char* argv[])
 {
     if ( argc <= 1 )
@@ -22,9 +47,9 @@ int main(int argc, char* argv[])
         exit(0);
     }
 
+    struct connection_ctx *connection_head = NULL;
+    struct connection_ctx *connection_tail = NULL;
     int conn_cnt = 0;
-    int connfds[MAX_CONN];
-    FILE *fds[MAX_CONN];
 
     for ( int i = 1; i < argc; i++ )
     {
@@ -107,7 +132,7 @@ int main(int argc, char* argv[])
                     case ENOBUFS:
                     case EOPNOTSUPP :
                     default:
-                        fprintf(stderr, "select connect error\n");
+                        fprintf(stderr, "socket connect error\n");
                         exit(1);
                 }
             }
@@ -149,8 +174,22 @@ int main(int argc, char* argv[])
                 }
             }
 
-            fds[conn_cnt] = fp;
-            connfds[conn_cnt] = sockfd;
+            struct connection_ctx *new_conn = (struct connection_ctx *) malloc(sizeof(struct connection_ctx));
+            if ( NULL != new_conn )
+            {
+                new_conn->socket_fd = sockfd;
+                new_conn->fp = fp;
+                new_conn->next = NULL;
+
+                if ( NULL != connection_tail )
+                {
+                    connection_tail->next = new_conn;
+                }
+                connection_tail = new_conn;
+
+                if ( NULL == connection_head )
+                    connection_head = new_conn;
+            }
 
             ++conn_cnt;
         }
@@ -165,15 +204,13 @@ int main(int argc, char* argv[])
 
     FD_ZERO(&current_sockets);
 
-    for ( int i = 0; i < conn_cnt; i++ )
+    for ( struct connection_ctx *conn = connection_head; conn != NULL; conn = conn->next )
     {
-        if ( max_socket_fd < connfds[i] ) max_socket_fd = connfds[i];
-        FD_SET(connfds[i], &current_sockets);
+        if ( max_socket_fd < conn->socket_fd ) max_socket_fd = conn->socket_fd;
+        FD_SET(conn->socket_fd, &current_sockets);
     }
 
-    int active_sock_cnt = conn_cnt;
-
-    while ( active_sock_cnt )
+    while ( 0 < conn_cnt )
     {
         // select is destructive
         read_fds = current_sockets;
@@ -186,8 +223,7 @@ int main(int argc, char* argv[])
             {
                 case EINTR:
                     // A signal was caught
-                    fprintf(stderr, "shutting down...\n");
-                    //close(listen_socket);
+                    clear_connection_ctx_list(connection_head);
                     exit(0);
 
                 case EBADF:
@@ -209,16 +245,17 @@ int main(int argc, char* argv[])
             }
         }
 
-        for ( int i = 0; i < conn_cnt; i++ )
+        for ( struct connection_ctx *conn = connection_head; conn != NULL; conn = conn->next )
         {
-            if ( FD_ISSET(connfds[i], &write_fds) )
+            if ( 0 != conn->socket_fd && FD_ISSET(conn->socket_fd, &write_fds) )
             {
-                char buffer[BUFLEN];
                 size_t bytes_read;
-                bytes_read = fread(buffer, sizeof(char), sizeof(buffer), fds[i]);
+                bytes_read = fread(conn->buffer, sizeof(char), sizeof(conn->buffer), conn->fp);
                 if ( 0 != bytes_read )
                 {
-                    int bytes_sent = send(connfds[i], buffer, bytes_read);
+                    // TODO
+                    // if bytes_sent is smaller than the bytes_read, the rest should be sent in the next try.
+                    int bytes_sent = send(conn->socket_fd, conn->buffer, bytes_read, 0);
                     if ( -1 == bytes_sent )
                     {
                         switch ( errno )
@@ -247,13 +284,18 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    FD_CLR(connfds[i], &current_sockets);
-                    close(connfds[i]);
-                    fclose(fds[i]);
-                    active_sock_cnt--;
+                    FD_CLR(conn->socket_fd, &current_sockets);
+                    close(conn->socket_fd);
+                    fclose(conn->fp);
+
+                    conn->socket_fd = 0;
+                    conn->fp = 0;
+
+                    conn_cnt--;
                 }
             }
         }
-
     }
+
+    clear_connection_ctx_list(connection_head);
 }
