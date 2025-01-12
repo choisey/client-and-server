@@ -1,0 +1,13 @@
+#!/bin/bash
+
+curdir=$(dirname $0)
+
+for i in a b c d e f g h i j k l m n o p q r s t u v w x y z; do
+    perl -E "say \"$i\" x 20000" > "/tmp/cttest-$i"
+done
+
+"$curdir/client" "/tmp/cttest-a" "/tmp/cttest-b" "/tmp/cttest-c" "/tmp/cttest-d" "/tmp/cttest-e" "/tmp/cttest-f" "/tmp/cttest-g" "/tmp/cttest-h" "/tmp/cttest-i" "/tmp/cttest-j" "/tmp/cttest-k" "/tmp/cttest-l" "/tmp/cttest-m" "/tmp/cttest-n" "/tmp/cttest-o" "/tmp/cttest-p" "/tmp/cttest-q" "/tmp/cttest-r" "/tmp/cttest-s" "/tmp/cttest-t" "/tmp/cttest-u" "/tmp/cttest-v" "/tmp/cttest-w" "/tmp/cttest-x" "/tmp/cttest-y" "/tmp/cttest-z"
+
+for i in a b c d e f g h i j k l m n o p q r s t u v w x y z; do
+    rm -f "/tmp/cttest-$i"
+done
