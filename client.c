@@ -1,18 +1,22 @@
 /*
  * A TCP client that manages multiple connections to a server and handles
- * all read and write operations in a single thread by using socket select.
+ * all read and write operations in a single thread using epoll.
  */
-#include <arpa/inet.h> // inet_addr()
+#include <arpa/inet.h>  // inet_addr()
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdlib.h> // exit()
-#include <unistd.h> // read(), write(), close()
+#include <stdlib.h>     // exit()
+#include <sys/epoll.h>
+#include <unistd.h>     // read(), write(), close()
 
 #define BUFLEN 64
 #define PORT 8080
 #define HOST "127.0.0.1"
 #define MAX_CONN 20
+
+// max number of events that can be returned by epoll at a time
+#define MAX_EVENTS 20
 
 struct connection_ctx
 {
@@ -35,6 +39,7 @@ void clear_connection_ctx_list(struct connection_ctx *head)
             fclose(head->fp);
 
         free(head);
+
         head = next;
     }
 }
@@ -62,34 +67,12 @@ int main(int argc, char* argv[])
                 switch ( errno )
                 {
                     case EACCES:
-                        // Permission to create a socket of the specified type and/or
-                        // protocol is denied.
-
                     case EAFNOSUPPORT:
-                        // The implementation does not support the specified address
-                        // family.
-
                     case EINVAL:
-                        // Unknown protocol, or protocol family not available.
-
-                        // Invalid flags in type.
-
-                        // The per-process limit on the number of open file
-                        // descriptors has been reached.
-
                     case ENFILE:
-                        // The system-wide limit on the total number of open files
-                        // has been reached.
-
                     case ENOBUFS:
                     case ENOMEM:
-                        // Insufficient memory is available.  The socket cannot be
-                        // created until sufficient resources are freed.
-
                     case EPROTONOSUPPORT:
-                        // The protocol type or the specified protocol is not
-                        // supported within this domain.
-
                     default:
                         fprintf(stderr, "socket creation error\n");
                         exit(1);
@@ -105,7 +88,6 @@ int main(int argc, char* argv[])
             {
                 switch ( errno )
                 {
-
                     case EADDRNOTAVAIL:
                     case EAFNOSUPPORT:
                     case EALREADY:
@@ -195,62 +177,82 @@ int main(int argc, char* argv[])
         }
     }
 
-    int max_socket_fd = 0;
+    // epoll
 
-    fd_set current_sockets;
-    fd_set read_fds;
-    fd_set write_fds;
-    fd_set except_fds;
+    int epollfd = epoll_create1(0);
+    if ( -1 == epollfd )
+    {
+        switch ( errno )
+        {
+            case EINVAL:
+            case EMFILE:
+            case ENFILE:
+            case ENOMEM:
+            default:
+                fprintf(stderr, "epoll create1 error\n");
+                exit(1);
+        }
+    }
 
-    FD_ZERO(&current_sockets);
+    // register sockets
+
+    struct epoll_event ev;
 
     for ( struct connection_ctx *conn = connection_head; conn != NULL; conn = conn->next )
     {
-        if ( max_socket_fd < conn->socket_fd ) max_socket_fd = conn->socket_fd;
-        FD_SET(conn->socket_fd, &current_sockets);
+        ev.events = EPOLLIN | EPOLLOUT;
+        ev.data.ptr = conn;
+
+        if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_ADD, conn->socket_fd, &ev) )
+        {
+            switch ( errno )
+            {
+                case EBADF:
+                case EEXIST:
+                case EINVAL:
+                case ENOENT:
+                case ENOMEM:
+                case ENOSPC:
+                case EPERM:
+                default:
+                    fprintf(stderr, "epoll_ctl error\n");
+                    exit(1);
+            }
+        }
     }
+
+    struct epoll_event events[MAX_EVENTS];
 
     while ( 0 < conn_cnt )
     {
-        // select is destructive
-        read_fds = current_sockets;
-        write_fds = current_sockets;
-        except_fds = current_sockets;
-
-        if ( -1 == select(max_socket_fd + 1, &read_fds, &write_fds, &except_fds, NULL) )
+        int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
+        if ( -1 == nfds )
         {
             switch ( errno )
             {
                 case EINTR:
                     // A signal was caught
+                    fprintf(stderr, "shutting down...\n");
                     clear_connection_ctx_list(connection_head);
                     exit(0);
 
                 case EBADF:
-                    // An invalid file descriptor was given in one of the sets.
-                    // (Perhaps a file descriptor that was already closed, or one
-                    // on which an error has occurred.)  However, see BUGS.
-
+                case EFAULT:
                 case EINVAL:
-                    // nfds is negative or exceeds the RLIMIT_NOFILE resource
-                    // limit (see getrlimit(2)).
-                    // The value contained within timeout is invalid.
-
-                case ENOMEM:
-                    // Unable to allocate memory for internal tables.
-
                 default:
-                    fprintf(stderr, "socket select error\n");
+                    fprintf(stderr, "epoll_wait error (%d)\n", errno);
                     exit(1);
             }
         }
 
-        for ( struct connection_ctx *conn = connection_head; conn != NULL; conn = conn->next )
+        for ( int i = 0; i < nfds; i++ )
         {
-            if ( 0 != conn->socket_fd && FD_ISSET(conn->socket_fd, &write_fds) )
+            struct connection_ctx *conn = (struct connection_ctx *) events[i].data.ptr;
+
+            if ( events[i].events & EPOLLOUT )
             {
                 size_t bytes_read;
-                bytes_read = fread(conn->buffer, sizeof(char), sizeof(conn->buffer), conn->fp);
+                bytes_read = fread(conn->buffer, sizeof(char), BUFLEN, conn->fp);
                 if ( 0 != bytes_read )
                 {
                     // TODO
@@ -281,10 +283,28 @@ int main(int argc, char* argv[])
                                 exit(1);
                         }
                     }
+
+                    fprintf(stderr, "sock:%d, read:%lu, sent: %d\n", conn->socket_fd, bytes_read, bytes_sent);
                 }
                 else
                 {
-                    FD_CLR(conn->socket_fd, &current_sockets);
+                    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
+                    {
+                        switch ( errno )
+                        {
+                            case EBADF:
+                            case EEXIST:
+                            case EINVAL:
+                            case ENOENT:
+                            case ENOMEM:
+                            case ENOSPC:
+                            case EPERM:
+                            default:
+                                fprintf(stderr, "epoll_ctl error\n");
+                                exit(1);
+                        }
+                    }
+
                     close(conn->socket_fd);
                     fclose(conn->fp);
 
