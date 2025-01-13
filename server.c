@@ -88,34 +88,12 @@ int main()
         switch ( errno )
         {
             case EACCES:
-                // Permission to create a socket of the specified type and/or
-                // protocol is denied.
-
             case EAFNOSUPPORT:
-                // The implementation does not support the specified address
-                // family.
-
             case EINVAL:
-                // Unknown protocol, or protocol family not available.
-
-                // Invalid flags in type.
-
-                // The per-process limit on the number of open file
-                // descriptors has been reached.
-
             case ENFILE:
-                // The system-wide limit on the total number of open files
-                // has been reached.
-
             case ENOBUFS:
             case ENOMEM:
-                // Insufficient memory is available.  The socket cannot be
-                // created until sufficient resources are freed.
-
             case EPROTONOSUPPORT:
-                // The protocol type or the specified protocol is not
-                // supported within this domain.
-
             default:
                 fprintf(stderr, "socket creation error (%d)\n", errno);
                 exit(1);
@@ -150,32 +128,14 @@ int main()
     {
         switch (errno )
         {
-            case EACCES:
-                // The address is protected, and the user is not the
-                // superuser.
-
             case EADDRINUSE:
-                // The given address is already in use.
+                fprintf(stderr, "The given address is already in use.\n");
+                exit(1);
 
-                // (Internet domain sockets) The port number was specified as
-                // zero in the socket address structure, but, upon attempting
-                // to bind to an ephemeral port, it was determined that all
-                // port numbers in the ephemeral port range are currently in
-                // use.  See the discussion of
-                // /proc/sys/net/ipv4/ip_local_port_range ip(7).
-
+            case EACCES:
             case EBADF:
-                // sockfd is not a valid file descriptor.
-
             case EINVAL:
-                // The socket is already bound to an address.
-
-                // addrlen is wrong, or addr is not a valid address for this
-                // socket's domain.
-
             case ENOTSOCK:
-                // The file descriptor sockfd does not refer to a socket.
-
             default:
                 fprintf(stderr, "socket bind error (%d)\n", errno);
                 exit(1);
@@ -187,24 +147,9 @@ int main()
         switch ( errno )
         {
             case EADDRINUSE:
-                // Another socket is already listening on the same port.
-                // (Internet domain sockets) The socket referred to by sockfd
-                // had not previously been bound to an address and, upon
-                // attempting to bind it to an ephemeral port, it was
-                // determined that all port numbers in the ephemeral port
-                // range are currently in use.  See the discussion of
-                // /proc/sys/net/ipv4/ip_local_port_range in ip(7).
-
             case EBADF:
-                // The argument sockfd is not a valid file descriptor.
-
             case ENOTSOCK:
-                // The file descriptor sockfd does not refer to a socket.
-
             case EOPNOTSUPP:
-                // The socket is not of a type that supports the listen()
-                // operation.
-
             default:
                 fprintf(stderr, "socket listen error (%d)\n", errno);
                 exit(1);
@@ -291,56 +236,18 @@ int main()
                         switch ( errno )
                         {
                             case EWOULDBLOCK:
-                                // The socket is marked nonblocking and no connections are
-                                // present to be accepted.  POSIX.1-2001 and POSIX.1-2008
-                                // allow either error to be returned for this case, and do
-                                // not require these constants to have the same value, so a
-                                // portable application should check for both possibilities.
-
                             case EBADF:
-                                // sockfd is not an open file descriptor.
-
                             case ECONNABORTED:
-                                // A connection has been aborted.
-
                             case EFAULT:
-                                // The addr argument is not in a writable part of the user
-                                // address space.
-
                             case EINTR:
-                                // The system call was interrupted by a signal that was
-                                //caught before a valid connection arrived; see signal(7).
-
                             case EINVAL:
-                                // Socket is not listening for connections, or addrlen is
-                                // invalid (e.g., is negative).
-
-                                // (accept4()) invalid value in flags.
-                                // The per-process limit on the number of open file
-                                // descriptors has been reached.
-
                             case ENFILE:
-                                // The system-wide limit on the total number of open files
-                                // has been reached.
-
                             case ENOBUFS:
                             case ENOMEM:
-                                // Not enough free memory.  This often means that the memory
-                                // allocation is limited by the socket buffer limits, not by
-                                // the system memory.
-
                             case ENOTSOCK:
-                                // The file descriptor sockfd does not refer to a socket.
-
                             case EOPNOTSUPP:
-                                // The referenced socket is not of type SOCK_STREAM.
-
                             case EPERM:
-                                // Firewall rules forbid connection.
-
                             case EPROTO:
-                                // Protocol error.
-
                             default:
                                 fprintf(stderr, "socket accept error (%d)\n", errno);
                                 exit(1);
