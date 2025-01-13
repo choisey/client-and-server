@@ -1,6 +1,6 @@
 /*
  * A TCP server that manages client connections and handles all read and write operations
- * in a single thread by using epoll.
+ * in a single thread using epoll.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -432,28 +432,39 @@ int main()
 
                 if ( -1 == bytes_read )
                 {
-                    if ( EAGAIN != errno && EWOULDBLOCK != errno )
+                    switch ( errno )
                     {
-                        fprintf(stderr, "socket recv error (%d)\n", errno);
+                        case EAGAIN:
+                            // no data available right now, try again later...
+                            break;
 
-                        if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
-                        {
-                            switch ( errno )
+                        case EBADF:
+                        case ECONNREFUSED:
+                        case EFAULT:
+                        case EINTR:
+                        case EINVAL:
+                        case ENOMEM:
+                        case ENOTCONN:
+                        case ENOTSOCK:
+                        default:
+                            if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
                             {
-                                case EBADF:
-                                case EEXIST:
-                                case EINVAL:
-                                case ENOENT:
-                                case ENOMEM:
-                                case ENOSPC:
-                                case EPERM:
-                                default:
-                                    fprintf(stderr, "epoll_ctl error\n");
-                                    exit(1);
+                                switch ( errno )
+                                {
+                                    case EBADF:
+                                    case EEXIST:
+                                    case EINVAL:
+                                    case ENOENT:
+                                    case ENOMEM:
+                                    case ENOSPC:
+                                    case EPERM:
+                                    default:
+                                        fprintf(stderr, "epoll_ctl error\n");
+                                        exit(1);
+                                }
                             }
-                        }
 
-                        close(events[i].data.fd);
+                            close(events[i].data.fd);
                     }
                 }
 
