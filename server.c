@@ -1,16 +1,21 @@
 /*
  * A TCP server that manages client connections and handles all read and write operations
- * in a single thread by using socket select.
+ * in a single thread by using epoll.
  */
 #include <errno.h>
-#include <stdio.h>
+#include <fcntl.h>
 #include <netinet/in.h> // struct sockaddr_in
-#include <signal.h> // sigaction()
-#include <stdlib.h> // exit()
-#include <unistd.h> // read(), write(), close()
+#include <signal.h>     // sigaction()
+#include <stdio.h>
+#include <stdlib.h>     // exit()
+#include <sys/epoll.h>
+#include <unistd.h>     // read(), write(), close()
 
 #define BUFLEN 512
 #define PORT 8080
+
+// max number of events that can be returned by epoll at a time
+#define MAX_EVENTS 20
 
 // The backlog argument defines the maximum length to which the
 // queue of pending connections for sockfd may grow. If a
@@ -77,8 +82,8 @@ int main()
     sigaction(SIGUSR1, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
 
-    int listen_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if ( -1 == listen_socket )
+    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    if ( -1 == listenfd )
     {
         switch ( errno )
         {
@@ -118,7 +123,7 @@ int main()
     }
 
     int reuse = 1;
-    if ( -1 == setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) )
+    if ( -1 == setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) )
     {
         switch ( errno )
         {
@@ -141,7 +146,7 @@ int main()
     servaddr.sin_port = htons(PORT);
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if ( -1 == bind(listen_socket, (struct sockaddr*) &servaddr, sizeof(servaddr)) )
+    if ( -1 == bind(listenfd, (struct sockaddr*) &servaddr, sizeof(servaddr)) )
     {
         switch (errno )
         {
@@ -175,10 +180,9 @@ int main()
                 fprintf(stderr, "socket bind error (%d)\n", errno);
                 exit(1);
         }
-
     }
 
-    if ( -1 == listen(listen_socket, MAX_BACKLOG) )
+    if ( -1 == listen(listenfd, MAX_BACKLOG) )
     {
         switch ( errno )
         {
@@ -207,74 +211,82 @@ int main()
         }
     }
 
-    // if we want to prevent select from reacting to SIG,
-    // we can use pselect() instead of select() with the following signal mask
-    //
-    // sigset_t pselect_set;
-    // sigemptyset(&pselect_set);
-    // sigaddset(&pselect_set, SIGINT);
-    // sigaddset(&pselect_set, SIGQUIT);
-    // sigaddset(&pselect_set, SIGTERM);
+    // epoll
 
-    int min_socket_fd = listen_socket;
-    int max_socket_fd = listen_socket;
+    int epollfd = epoll_create1(0);
+    if ( -1 == epollfd )
+    {
+        switch ( errno )
+        {
+            case EINVAL:
+            case EMFILE:
+            case ENFILE:
+            case ENOMEM:
+            default:
+                fprintf(stderr, "epoll create1 error\n");
+                exit(1);
+        }
+    }
 
-    fd_set current_sockets;
-    fd_set read_fds;
-    fd_set write_fds;
-    fd_set except_fds;
+    // register listen socket
 
-    FD_ZERO(&current_sockets);
-    FD_SET(listen_socket, &current_sockets);
+    struct epoll_event ev;
+    ev.events = EPOLLIN;
+    ev.data.fd = listenfd;
+
+    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_ADD, listenfd, &ev) )
+    {
+        switch ( errno )
+        {
+            case EBADF:
+            case EEXIST:
+            case EINVAL:
+            case ENOENT:
+            case ENOMEM:
+            case ENOSPC:
+            case EPERM:
+            default:
+                fprintf(stderr, "epoll_ctl error\n");
+                exit(1);
+        }
+    }
+
+    struct epoll_event events[MAX_EVENTS];
+
+    // event loop
 
     while ( 1 )
     {
-        // select is destructive
-        read_fds = current_sockets;
-        write_fds = current_sockets;
-        except_fds = current_sockets;
-
-        if ( -1 == select(max_socket_fd + 1, &read_fds, &write_fds, &except_fds, NULL) )
+        int nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
+        if ( -1 == nfds )
         {
             switch ( errno )
             {
                 case EINTR:
                     // A signal was caught
                     fprintf(stderr, "shutting down...\n");
-                    close(listen_socket);
+                    close(listenfd);
                     exit(0);
 
                 case EBADF:
-                    // An invalid file descriptor was given in one of the sets.
-                    // (Perhaps a file descriptor that was already closed, or one
-                    // on which an error has occurred.)  However, see BUGS.
-
+                case EFAULT:
                 case EINVAL:
-                    // nfds is negative or exceeds the RLIMIT_NOFILE resource
-                    // limit (see getrlimit(2)).
-                    // The value contained within timeout is invalid.
-
-                case ENOMEM:
-                    // Unable to allocate memory for internal tables.
-
                 default:
-                    fprintf(stderr, "socket select error (%d)\n", errno);
+                    fprintf(stderr, "epoll_wait error (%d)\n", errno);
                     exit(1);
             }
         }
 
-        // TODO
-        // we can keep the list of active sockets instead of iterating from min_ to max_
-        for ( int fd = min_socket_fd; fd <= max_socket_fd; fd++ )
+        for ( int i = 0; i < nfds; i++ )
         {
-            if ( fd == listen_socket )
+            if ( events[i].data.fd == listenfd )
             {
-                if ( FD_ISSET(fd, &read_fds) )
+                if ( events[i].events & EPOLLIN )
                 {
                     socklen_t addr_size = sizeof(struct sockaddr_in);
                     struct sockaddr_in client_addr;
-                    int client_socket = accept(listen_socket, (struct sockaddr*) &client_addr, &addr_size);
-                    if ( -1 == client_socket )
+                    int connfd = accept(listenfd, (struct sockaddr*) &client_addr, &addr_size);
+                    if ( -1 == connfd )
                     {
                         switch ( errno )
                         {
@@ -335,25 +347,78 @@ int main()
                         }
                     }
 
-                    if ( client_socket < min_socket_fd )
-                        min_socket_fd = client_socket;
+                    // set non-blocking
 
-                    if ( max_socket_fd < client_socket )
-                        max_socket_fd = client_socket;
+                    int flags = fcntl(connfd, F_GETFL, 0);
+                    if ( -1 == flags )
+                    {
+                        switch ( errno )
+                        {
+                            case EACCES:
+                            case EAGAIN:
+                            case EBADF:
+                            case EINTR:
+                            case EINVAL:
+                            case EMFILE:
+                            case ENOLCK:
+                            case EOVERFLOW:
+                            default:
+                                fprintf(stderr, "select fcntl error\n");
+                                exit(1);
+                        }
+                    }
 
-                    FD_SET(client_socket, &current_sockets);
+                    if ( -1 == fcntl(connfd, F_SETFL, flags | O_NONBLOCK) )
+                    {
+                        switch ( errno )
+                        {
+                            case EACCES:
+                            case EAGAIN:
+                            case EBADF:
+                            case EINTR:
+                            case EINVAL:
+                            case EMFILE:
+                            case ENOLCK:
+                            case EOVERFLOW:
+                            default:
+                                fprintf(stderr, "select fcntl error\n");
+                                exit(1);
+                        }
+                    }
+
+                    // register the new connection to the rpoll
+
+                    ev.events = EPOLLIN | EPOLLOUT;
+                    ev.data.fd = connfd;
+                    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_ADD, connfd, &ev) )
+                    {
+                        switch ( errno )
+                        {
+                            case EBADF:
+                            case EEXIST:
+                            case EINVAL:
+                            case ENOENT:
+                            case ENOMEM:
+                            case ENOSPC:
+                            case EPERM:
+                            default:
+                                fprintf(stderr, "epoll_ctl error\n");
+                                exit(1);
+                        }
+                    }
+
                 }
 
                 continue;
             }
 
-            if ( FD_ISSET(fd, &read_fds) )
+            if ( events[i].events & EPOLLIN )
             {
                 char buffer[BUFLEN];
                 size_t msgsize = 0;
                 ssize_t bytes_read;
 
-                while ( 0 < ( bytes_read = recv(fd, buffer, sizeof(buffer) - 1, MSG_DONTWAIT) ) )
+                while ( 0 < ( bytes_read = recv(events[i].data.fd, buffer, sizeof(buffer) - 1, MSG_DONTWAIT) ) )
                 {
                     *(buffer + bytes_read) = '\0';
                     msgsize += bytes_read;
@@ -370,8 +435,25 @@ int main()
                     if ( EAGAIN != errno && EWOULDBLOCK != errno )
                     {
                         fprintf(stderr, "socket recv error (%d)\n", errno);
-                        FD_CLR(fd, &current_sockets);
-                        close(fd);
+
+                        if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
+                        {
+                            switch ( errno )
+                            {
+                                case EBADF:
+                                case EEXIST:
+                                case EINVAL:
+                                case ENOENT:
+                                case ENOMEM:
+                                case ENOSPC:
+                                case EPERM:
+                                default:
+                                    fprintf(stderr, "epoll_ctl error\n");
+                                    exit(1);
+                            }
+                        }
+
+                        close(events[i].data.fd);
                     }
                 }
 
@@ -379,19 +461,36 @@ int main()
                 {
                     // When a stream socket peer has performed an orderly shutdown,
                     // the return value will be 0 (the traditional "end-of-file" return).
-                    FD_CLR(fd, &current_sockets);
-                    close(fd);
+
+                    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
+                    {
+                        switch ( errno )
+                        {
+                            case EBADF:
+                            case EEXIST:
+                            case EINVAL:
+                            case ENOENT:
+                            case ENOMEM:
+                            case ENOSPC:
+                            case EPERM:
+                            default:
+                                fprintf(stderr, "epoll_ctl error\n");
+                                exit(1);
+                        }
+                    }
+
+                    close(events[i].data.fd);
                 }
             }
 
-            if ( FD_ISSET(fd, &write_fds) )
+            if ( events[i].events & EPOLLOUT )
             {
                 // socket is ready for writing
             }
 
-            if ( FD_ISSET(fd, &except_fds) )
+            if ( events[i].events & EPOLLERR )
             {
-                // exceptional condition
+                // error condition
             }
         }
     }
