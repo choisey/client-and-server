@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) Seungyeob Choi
+ *
  * A TCP client that manages multiple connections to a server and handles
  * all read and write operations in a single thread using epoll.
  */
@@ -33,7 +35,20 @@ void clear_connection_ctx_list(struct connection_ctx *head)
         struct connection_ctx *next = head->next;
 
         if ( 0 != head->socket_fd )
-            close(head->socket_fd);
+        {
+            if ( -1 == close(head->socket_fd) )
+            {
+                switch ( errno )
+                {
+                    case EBADF:
+                    case EINTR:
+                    case EIO:
+                    default:
+                        fprintf(stderr, "socket close error (%d)", errno);
+                        exit(1);
+                }
+            }
+        }
 
         if ( NULL != head->fp )
             fclose(head->fp);
@@ -74,10 +89,12 @@ int main(int argc, char* argv[])
                     case ENOMEM:
                     case EPROTONOSUPPORT:
                     default:
-                        fprintf(stderr, "socket creation error\n");
+                        fprintf(stderr, "socket creation error (%d)\n", errno);
                         exit(1);
                 }
             }
+
+            // connect to the server
 
             struct sockaddr_in servaddr;
             servaddr.sin_family = AF_INET;
@@ -88,11 +105,14 @@ int main(int argc, char* argv[])
             {
                 switch ( errno )
                 {
+                    case ECONNREFUSED:
+                        fprintf(stderr, "connection refused.\n");
+                        exit(1);
+
                     case EADDRNOTAVAIL:
                     case EAFNOSUPPORT:
                     case EALREADY:
                     case EBADF:
-                    case ECONNREFUSED:
                     case EINPROGRESS:
                     case EINTR:
                     case EISCONN:
@@ -112,12 +132,14 @@ int main(int argc, char* argv[])
                     case ENAMETOOLONG:
                     case ENETDOWN:
                     case ENOBUFS:
-                    case EOPNOTSUPP :
+                    case EOPNOTSUPP:
                     default:
-                        fprintf(stderr, "socket connect error\n");
+                        fprintf(stderr, "socket connect error (%d)\n", errno);
                         exit(1);
                 }
             }
+
+            // set non-blocking
 
             int flags = fcntl(sockfd, F_GETFL, 0);
             if ( -1 == flags )
@@ -133,7 +155,7 @@ int main(int argc, char* argv[])
                     case ENOLCK:
                     case EOVERFLOW:
                     default:
-                        fprintf(stderr, "select fcntl error\n");
+                        fprintf(stderr, "select fcntl error (%d)\n", errno);
                         exit(1);
                 }
             }
@@ -151,10 +173,12 @@ int main(int argc, char* argv[])
                     case ENOLCK:
                     case EOVERFLOW:
                     default:
-                        fprintf(stderr, "select fcntl error\n");
+                        fprintf(stderr, "select fcntl error (%d)\n", errno);
                         exit(1);
                 }
             }
+
+            // store the socket in connection_ctx
 
             struct connection_ctx *new_conn = (struct connection_ctx *) malloc(sizeof(struct connection_ctx));
             if ( NULL != new_conn )
@@ -189,7 +213,7 @@ int main(int argc, char* argv[])
             case ENFILE:
             case ENOMEM:
             default:
-                fprintf(stderr, "epoll create1 error\n");
+                fprintf(stderr, "epoll create1 error (%d)\n", errno);
                 exit(1);
         }
     }
@@ -215,7 +239,7 @@ int main(int argc, char* argv[])
                 case ENOSPC:
                 case EPERM:
                 default:
-                    fprintf(stderr, "epoll_ctl error\n");
+                    fprintf(stderr, "epoll_ctl error (%d)\n", errno);
                     exit(1);
             }
         }
@@ -279,7 +303,7 @@ int main(int argc, char* argv[])
                             case EOPNOTSUPP:
                             case EPIPE:
                             default:
-                                fprintf(stderr, "socket send error\n");
+                                fprintf(stderr, "socket send error (%d)\n", errno);
                                 exit(1);
                         }
                     }
@@ -288,7 +312,7 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
+                    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, conn->socket_fd, &ev) )
                     {
                         switch ( errno )
                         {
@@ -300,12 +324,24 @@ int main(int argc, char* argv[])
                             case ENOSPC:
                             case EPERM:
                             default:
-                                fprintf(stderr, "epoll_ctl error\n");
+                                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
                                 exit(1);
                         }
                     }
 
-                    close(conn->socket_fd);
+                    if ( -1 == close(conn->socket_fd) )
+                    {
+                        switch ( errno )
+                        {
+                            case EBADF:
+                            case EINTR:
+                            case EIO:
+                            default:
+                                fprintf(stderr, "socket close error (%d)", errno);
+                                exit(1);
+                        }
+                    }
+
                     fclose(conn->fp);
 
                     conn->socket_fd = 0;

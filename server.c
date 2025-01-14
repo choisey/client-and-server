@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) Seungyeob Choi
+ *
  * A TCP server that manages client connections and handles all read and write operations
  * in a single thread using epoll.
  */
@@ -137,7 +139,7 @@ int main()
             case ENFILE:
             case ENOMEM:
             default:
-                fprintf(stderr, "epoll create1 error\n");
+                fprintf(stderr, "epoll create1 error (%d)\n", errno);
                 exit(1);
         }
     }
@@ -160,7 +162,7 @@ int main()
             case ENOSPC:
             case EPERM:
             default:
-                fprintf(stderr, "epoll_ctl error\n");
+                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
                 exit(1);
         }
     }
@@ -179,7 +181,18 @@ int main()
                 case EINTR:
                     // A signal was caught
                     fprintf(stderr, "shutting down...\n");
-                    close(listenfd);
+                    if ( -1 == close(listenfd) )
+                    {
+                        switch ( errno )
+                        {
+                            case EBADF:
+                            case EINTR:
+                            case EIO:
+                            default:
+                                fprintf(stderr, "socket close error (%d)", errno);
+                                exit(1);
+                        }
+                    }
                     exit(0);
 
                 case EBADF:
@@ -239,7 +252,7 @@ int main()
                             case ENOLCK:
                             case EOVERFLOW:
                             default:
-                                fprintf(stderr, "select fcntl error\n");
+                                fprintf(stderr, "select fcntl error (%d)\n", errno);
                                 exit(1);
                         }
                     }
@@ -257,7 +270,7 @@ int main()
                             case ENOLCK:
                             case EOVERFLOW:
                             default:
-                                fprintf(stderr, "select fcntl error\n");
+                                fprintf(stderr, "select fcntl error (%d)\n", errno);
                                 exit(1);
                         }
                     }
@@ -278,7 +291,7 @@ int main()
                             case ENOSPC:
                             case EPERM:
                             default:
-                                fprintf(stderr, "epoll_ctl error\n");
+                                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
                                 exit(1);
                         }
                     }
@@ -335,12 +348,23 @@ int main()
                                     case ENOSPC:
                                     case EPERM:
                                     default:
-                                        fprintf(stderr, "epoll_ctl error\n");
+                                        fprintf(stderr, "epoll_ctl error (%d)\n", errno);
                                         exit(1);
                                 }
                             }
 
-                            close(events[i].data.fd);
+                            if ( -1 == close(events[i].data.fd) )
+                            {
+                                switch ( errno )
+                                {
+                                    case EBADF:
+                                    case EINTR:
+                                    case EIO:
+                                    default:
+                                        fprintf(stderr, "socket close error (%d)", errno);
+                                        exit(1);
+                                }
+                            }
                     }
                 }
 
@@ -361,12 +385,23 @@ int main()
                             case ENOSPC:
                             case EPERM:
                             default:
-                                fprintf(stderr, "epoll_ctl error\n");
+                                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
                                 exit(1);
                         }
                     }
 
-                    close(events[i].data.fd);
+                    if ( -1 == close(events[i].data.fd) )
+                    {
+                        switch ( errno )
+                        {
+                            case EBADF:
+                            case EINTR:
+                            case EIO:
+                            default:
+                                fprintf(stderr, "socket close error (%d)", errno);
+                                exit(1);
+                        }
+                    }
                 }
             }
 
