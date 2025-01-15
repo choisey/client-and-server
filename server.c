@@ -41,6 +41,19 @@ void signal_handler(int signo)
     }
 }
 
+static int handle_read(int fd, char *buf, int buflen)
+{
+    char *p = buf;
+    for ( int i = 0; i < buflen; i++ )
+    {
+        if ( *p < ' ' && *p != '\n' ) *p = '.';
+        p++;
+    }
+    printf("%.*s", buflen, buf);
+    fflush(stdout);
+    return buflen;
+}
+
 int main()
 {
     // custom SIG handler
@@ -304,22 +317,16 @@ int main()
             if ( events[i].events & EPOLLIN )
             {
                 char buffer[BUFLEN];
-                size_t msgsize = 0;
-                ssize_t bytes_read;
+                size_t total_bytes_in = 0;
+                ssize_t received;
 
-                while ( 0 < ( bytes_read = recv(events[i].data.fd, buffer, sizeof(buffer) - 1, MSG_DONTWAIT) ) )
+                while ( 0 < ( received = recv(events[i].data.fd, buffer, sizeof(buffer), 0) ) )
                 {
-                    *(buffer + bytes_read) = '\0';
-                    msgsize += bytes_read;
-                    for ( int i = 0; i < bytes_read; i++ )
-                    {
-                        if ( buffer[i] == '\0' ) buffer[i] = '.';
-                    }
-                    printf("%s", buffer);
-                    fflush(stdout);
+                    handle_read(events[i].data.fd, buffer, received);
+                    total_bytes_in += received;
                 }
 
-                if ( -1 == bytes_read )
+                if ( -1 == received )
                 {
                     switch ( errno )
                     {
@@ -361,17 +368,17 @@ int main()
                                     case EINTR:
                                     case EIO:
                                     default:
-                                        fprintf(stderr, "socket close error (%d)", errno);
+                                        fprintf(stderr, "socket close error (%d)\n", errno);
                                         exit(1);
                                 }
                             }
                     }
                 }
 
-                if ( 0 == msgsize )
+                if ( 0 == total_bytes_in )
                 {
-                    // When a stream socket peer has performed an orderly shutdown,
-                    // the return value will be 0 (the traditional "end-of-file" return).
+                    // The stream socket peer has performed an orderly shutdown.
+                    // recv returning 0 is a socket-closed notification.
 
                     if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
                     {
