@@ -41,6 +41,7 @@ void signal_handler(int signo)
     }
 }
 
+// should be called when the connection is closed by the peer
 static int handle_close(int epollfd, int connfd)
 {
     if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, connfd, NULL) )
@@ -79,6 +80,7 @@ static int handle_close(int epollfd, int connfd)
 int main()
 {
     // custom SIG handler
+    // for a graceful server shutdown
     struct sigaction sa;
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
@@ -87,6 +89,8 @@ int main()
     sigaction(SIGTERM, &sa, NULL);  // process termination
     sigaction(SIGUSR1, &sa, NULL);  // user defined
     sigaction(SIGUSR2, &sa, NULL);  // user defined
+
+    // create a listener socket
 
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if ( -1 == listenfd )
@@ -125,6 +129,8 @@ int main()
         }
     }
 
+    // bind
+
     struct sockaddr_in servaddr;
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(PORT);
@@ -147,6 +153,8 @@ int main()
                 exit(1);
         }
     }
+
+    // listen
 
     if ( -1 == listen(listenfd, MAX_BACKLOG) )
     {
@@ -179,7 +187,7 @@ int main()
         }
     }
 
-    // register listen socket
+    // register listener socket
 
     struct epoll_event ev;
     ev.events = EPOLLIN;
@@ -241,6 +249,10 @@ int main()
 
         for ( int i = 0; i < nfds; i++ )
         {
+            // This is declared here to pass it from EPOLLIN to EPOLLOUT in this test implementation.
+            // In most other cases, it would likely be placed inside EPOLLIN block.
+            size_t total_bytes_in = 0;
+
             if ( events[i].data.fd == listenfd )
             {
                 if ( events[i].events & EPOLLIN )
@@ -341,7 +353,6 @@ int main()
                 // socket has data to read
 
                 char buffer[BUFLEN];
-                size_t total_bytes_in = 0;
                 ssize_t received;
 
                 while ( 0 < ( received = recv(events[i].data.fd, buffer, sizeof(buffer), 0) ) )
@@ -401,40 +412,45 @@ int main()
             {
                 // socket is ready for writing
 
-                int sent = send(events[i].data.fd, "Ok\n", 3, 0);
-
-                if ( -1 == sent )
+                if ( 0 != total_bytes_in )
                 {
-                    switch ( errno )
+                    static char ack[] = "Ack\n";
+
+                    int sent = send(events[i].data.fd, ack, sizeof(ack), 0);
+
+                    if ( -1 == sent )
                     {
-                        case EBADF:
-                            // bad file descriptor
-                            // already closed during read
-                            break;
+                        switch ( errno )
+                        {
+                            case EBADF:
+                                // bad file descriptor
+                                // the connection was already closed while reading
+                                break;
 
-                        case ECONNRESET:
-                            // connection reset by the peer
-                            handle_close(epollfd, events[i].data.fd);
-                            break;
+                            case ECONNRESET:
+                                // connection reset by the peer
+                                handle_close(epollfd, events[i].data.fd);
+                                break;
 
-                        case EACCES:
-                        case EAGAIN:
-                        case EALREADY:
-                        case EDESTADDRREQ:
-                        case EFAULT:
-                        case EINTR:
-                        case EINVAL:
-                        case EISCONN:
-                        case EMSGSIZE:
-                        case ENOBUFS:
-                        case ENOMEM:
-                        case ENOTCONN:
-                        case ENOTSOCK:
-                        case EOPNOTSUPP:
-                        case EPIPE:
-                        default:
-                            fprintf(stderr, "socket send error (%d)", errno);
-                            exit(1);
+                            case EACCES:
+                            case EAGAIN:
+                            case EALREADY:
+                            case EDESTADDRREQ:
+                            case EFAULT:
+                            case EINTR:
+                            case EINVAL:
+                            case EISCONN:
+                            case EMSGSIZE:
+                            case ENOBUFS:
+                            case ENOMEM:
+                            case ENOTCONN:
+                            case ENOTSOCK:
+                            case EOPNOTSUPP:
+                            case EPIPE:
+                            default:
+                                fprintf(stderr, "socket send error (%d)", errno);
+                                exit(1);
+                        }
                     }
                 }
             }
