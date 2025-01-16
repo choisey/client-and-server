@@ -412,10 +412,14 @@ int main()
                             // already closed during read
                             break;
 
+                        case ECONNRESET:
+                            // connection reset by the peer
+                            handle_close(epollfd, events[i].data.fd);
+                            break;
+
                         case EACCES:
                         case EAGAIN:
                         case EALREADY:
-                        case ECONNRESET:
                         case EDESTADDRREQ:
                         case EFAULT:
                         case EINTR:
