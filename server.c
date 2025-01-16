@@ -41,17 +41,39 @@ void signal_handler(int signo)
     }
 }
 
-static int handle_read(int fd, char *buf, int buflen)
+static int handle_close(int epollfd, int connfd)
 {
-    char *p = buf;
-    for ( int i = 0; i < buflen; i++ )
+    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, connfd, NULL) )
     {
-        if ( *p < ' ' && *p != '\n' ) *p = '.';
-        p++;
+        switch ( errno )
+        {
+            case EBADF:
+            case EEXIST:
+            case EINVAL:
+            case ENOENT:
+            case ENOMEM:
+            case ENOSPC:
+            case EPERM:
+            default:
+                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
+                exit(1);
+        }
     }
-    printf("%.*s", buflen, buf);
-    fflush(stdout);
-    return buflen;
+
+    if ( -1 == close(connfd) )
+    {
+        switch ( errno )
+        {
+            case EBADF:
+            case EINTR:
+            case EIO:
+            default:
+                fprintf(stderr, "socket close error (%d)\n", errno);
+                exit(1);
+        }
+    }
+
+    return 0;
 }
 
 int main()
@@ -290,7 +312,7 @@ int main()
 
                     // register the new connection to the rpoll
 
-                    ev.events = EPOLLIN | EPOLLOUT;
+                    ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
                     ev.data.fd = connfd;
                     if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_ADD, connfd, &ev) )
                     {
@@ -316,105 +338,101 @@ int main()
 
             if ( events[i].events & EPOLLIN )
             {
+                // socket has data to read
+
                 char buffer[BUFLEN];
                 size_t total_bytes_in = 0;
                 ssize_t received;
 
                 while ( 0 < ( received = recv(events[i].data.fd, buffer, sizeof(buffer), 0) ) )
                 {
-                    handle_read(events[i].data.fd, buffer, received);
+                    char *p = buffer;
+                    for ( int i = 0; i < received; i++ )
+                    {
+                        if ( *p < ' ' && *p != '\n' ) *p = '.';
+                        p++;
+                    }
+                    printf("%.*s", (int) received, buffer);
+                    fflush(stdout);
+
                     total_bytes_in += received;
                 }
 
-                if ( -1 == received )
+                switch ( received )
                 {
-                    switch ( errno )
-                    {
-                        case EAGAIN:
-                            // no data available right now, try again later...
-                            break;
-
-                        case EBADF:
-                        case ECONNREFUSED:
-                        case EFAULT:
-                        case EINTR:
-                        case EINVAL:
-                        case ENOMEM:
-                        case ENOTCONN:
-                        case ENOTSOCK:
-                        default:
-                            if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
-                            {
-                                switch ( errno )
-                                {
-                                    case EBADF:
-                                    case EEXIST:
-                                    case EINVAL:
-                                    case ENOENT:
-                                    case ENOMEM:
-                                    case ENOSPC:
-                                    case EPERM:
-                                    default:
-                                        fprintf(stderr, "epoll_ctl error (%d)\n", errno);
-                                        exit(1);
-                                }
-                            }
-
-                            if ( -1 == close(events[i].data.fd) )
-                            {
-                                switch ( errno )
-                                {
-                                    case EBADF:
-                                    case EINTR:
-                                    case EIO:
-                                    default:
-                                        fprintf(stderr, "socket close error (%d)\n", errno);
-                                        exit(1);
-                                }
-                            }
-                    }
-                }
-
-                if ( 0 == total_bytes_in )
-                {
-                    // The stream socket peer has performed an orderly shutdown.
-                    // recv returning 0 is a socket-closed notification.
-
-                    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev) )
-                    {
+                    case -1:
                         switch ( errno )
                         {
-                            case EBADF:
-                            case EEXIST:
-                            case EINVAL:
-                            case ENOENT:
-                            case ENOMEM:
-                            case ENOSPC:
-                            case EPERM:
-                            default:
-                                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
-                                exit(1);
-                        }
-                    }
+                            case EAGAIN:
+                                // no data available right now, try again later...
+                                break;
 
-                    if ( -1 == close(events[i].data.fd) )
-                    {
-                        switch ( errno )
-                        {
+                            case ECONNRESET:
+                                // connection reset by the peer
+                                handle_close(epollfd, events[i].data.fd);
+                                break;
+
                             case EBADF:
+                            case ECONNREFUSED:
+                            case EFAULT:
                             case EINTR:
-                            case EIO:
+                            case EINVAL:
+                            case ENOMEM:
+                            case ENOTCONN:
+                            case ENOTSOCK:
                             default:
-                                fprintf(stderr, "socket close error (%d)", errno);
+                                fprintf(stderr, "socket recv error (%d)\n", errno);
                                 exit(1);
                         }
-                    }
+                        break;
+
+                    default:
+                        if ( 0 == total_bytes_in )
+                        {
+                            // The stream socket peer has performed an orderly shutdown.
+                            // recv returning 0 is a socket-closed notification.
+
+                            handle_close(epollfd, events[i].data.fd);
+                        }
                 }
             }
 
             if ( events[i].events & EPOLLOUT )
             {
                 // socket is ready for writing
+
+                int sent = send(events[i].data.fd, "Ok\n", 3, 0);
+
+                if ( -1 == sent )
+                {
+                    switch ( errno )
+                    {
+                        case EBADF:
+                            // bad file descriptor
+                            // already closed during read
+                            break;
+
+                        case EACCES:
+                        case EAGAIN:
+                        case EALREADY:
+                        case ECONNRESET:
+                        case EDESTADDRREQ:
+                        case EFAULT:
+                        case EINTR:
+                        case EINVAL:
+                        case EISCONN:
+                        case EMSGSIZE:
+                        case ENOBUFS:
+                        case ENOMEM:
+                        case ENOTCONN:
+                        case ENOTSOCK:
+                        case EOPNOTSUPP:
+                        case EPIPE:
+                        default:
+                            fprintf(stderr, "socket send error (%d)", errno);
+                            exit(1);
+                    }
+                }
             }
 
             if ( events[i].events & EPOLLERR )
