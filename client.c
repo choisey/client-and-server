@@ -16,7 +16,6 @@
 #define BUFLEN 64
 #define PORT 8080
 #define HOST "127.0.0.1"
-#define MAX_CONN 20
 
 // max number of events that can be returned by epoll at a time
 #define MAX_EVENTS 20
@@ -392,14 +391,12 @@ int main(int argc, char* argv[])
             {
                 if ( NULL != conn->fp && 0 != conn->socket_fd )
                 {
-                    size_t bytes_read;
-                    bytes_read = fread(conn->buffer, sizeof(char), BUFLEN, conn->fp);
-                    if ( 0 != bytes_read )
+                    size_t nbytes;
+                    nbytes = fread(conn->buffer, sizeof(char), BUFLEN, conn->fp);
+                    if ( 0 != nbytes )
                     {
-                        // TODO
-                        // if bytes_sent is smaller than the bytes_read, the rest should be sent in the next try.
-                        int bytes_sent = send(conn->socket_fd, conn->buffer, bytes_read, 0);
-                        if ( -1 == bytes_sent )
+                        int sent = send(conn->socket_fd, conn->buffer, nbytes, 0);
+                        if ( -1 == sent )
                         {
                             switch ( errno )
                             {
@@ -426,13 +423,16 @@ int main(int argc, char* argv[])
                         }
 
                         // reached to end-of-file
-                        if ( bytes_read < BUFLEN )
+                        // beware: there is corner case that the buffer ends exactly at the end-of-file
+                        // in that case, the end-of-file is not detected here, and will be taken care of
+                        // in the next EPOLLOUT
+                        if ( nbytes < BUFLEN )
                         {
                             fclose(conn->fp);
                             conn->fp = NULL;
                         }
 
-                        fprintf(stderr, "sock:%d, fread:%lu, sent:%d\n", conn->socket_fd, bytes_read, bytes_sent);
+                        fprintf(stderr, "sock:%d, fread:%lu, sent:%d\n", conn->socket_fd, nbytes, sent);
                     }
                     else
                     {
@@ -451,6 +451,12 @@ int main(int argc, char* argv[])
                         }
                     }
                 }
+            }
+
+            if ( events[i].events & EPOLLERR )
+            {
+                // error condition
+                fprintf(stderr, "EPOLLERR\n");
             }
         }
     }
