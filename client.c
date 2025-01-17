@@ -28,7 +28,7 @@ struct connection_ctx
     struct connection_ctx *next;
 };
 
-void clear_connection_ctx_list(struct connection_ctx *head)
+static void clear_connection_ctx_list(struct connection_ctx *head)
 {
     while ( NULL != head )
     {

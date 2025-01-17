@@ -19,6 +19,10 @@
 // max number of events that can be returned by epoll at a time
 #define MAX_EVENTS 20
 
+#ifdef _POSIX_C_SOURCE
+void signal_handler(int signo);
+#endif
+
 // The backlog argument defines the maximum length to which the
 // queue of pending connections for sockfd may grow. If a
 // connection request arrives when the queue is full, the client may
@@ -27,6 +31,7 @@
 // ignored so that a later reattempt at connection succeeds.
 #define MAX_BACKLOG 3
 
+#ifdef _POSIX_C_SOURCE
 void signal_handler(int signo)
 {
     switch ( signo )
@@ -40,6 +45,7 @@ void signal_handler(int signo)
             break;
     }
 }
+#endif
 
 // should be called when the connection is closed by the peer
 static int handle_close(int epollfd, int connfd)
@@ -77,10 +83,13 @@ static int handle_close(int epollfd, int connfd)
     return 0;
 }
 
-int main()
+int main(void)
 {
+#ifdef _POSIX_C_SOURCE
     // custom SIG handler
     // for a graceful server shutdown
+    // Note: when compiling with -std=c17, the compiler does not recognize the sigaction structure.
+    // This is because sigaction is not part of the C standard library but is defined in POSIX. 
     struct sigaction sa;
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
@@ -89,6 +98,7 @@ int main()
     sigaction(SIGTERM, &sa, NULL);  // process termination
     sigaction(SIGUSR1, &sa, NULL);  // user defined
     sigaction(SIGUSR2, &sa, NULL);  // user defined
+#endif
 
     // create a listener socket
 
@@ -458,6 +468,7 @@ int main()
             if ( events[i].events & EPOLLERR )
             {
                 // error condition
+                fprintf(stderr, "EPOLLERR\n");
             }
         }
     }
