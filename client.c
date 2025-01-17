@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>     // exit()
+#include <string.h>     // strncmp()
 #include <sys/epoll.h>
 #include <unistd.h>     // read(), write(), close()
 
@@ -57,6 +58,41 @@ void clear_connection_ctx_list(struct connection_ctx *head)
 
         head = next;
     }
+}
+
+static int close_connection(int epollfd, int connfd)
+{
+    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, connfd, NULL) )
+    {
+        switch ( errno )
+        {
+            case EBADF:
+            case EEXIST:
+            case EINVAL:
+            case ENOENT:
+            case ENOMEM:
+            case ENOSPC:
+            case EPERM:
+            default:
+                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
+                exit(1);
+        }
+    }
+
+    if ( -1 == close(connfd) )
+    {
+        switch ( errno )
+        {
+            case EBADF:
+            case EINTR:
+            case EIO:
+            default:
+                fprintf(stderr, "socket close error (%d)\n", errno);
+                exit(1);
+        }
+    }
+
+    return 0;
 }
 
 int main(int argc, char* argv[])
@@ -224,7 +260,7 @@ int main(int argc, char* argv[])
 
     for ( struct connection_ctx *conn = connection_head; conn != NULL; conn = conn->next )
     {
-        ev.events = EPOLLIN | EPOLLOUT;
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
         ev.data.ptr = conn;
 
         if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_ADD, conn->socket_fd, &ev) )
@@ -273,81 +309,147 @@ int main(int argc, char* argv[])
         {
             struct connection_ctx *conn = (struct connection_ctx *) events[i].data.ptr;
 
-            if ( events[i].events & EPOLLOUT )
+            // This is declared here to pass it from EPOLLIN to EPOLLOUT in this test implementation.
+            // In most other cases, it would likely be placed inside EPOLLIN block.
+            size_t total_bytes_in = 0;
+            int acknowledged = 0;
+
+            if ( events[i].events & EPOLLIN )
             {
-                size_t bytes_read;
-                bytes_read = fread(conn->buffer, sizeof(char), BUFLEN, conn->fp);
-                if ( 0 != bytes_read )
+                // socket has data to read
+
+                char buffer[BUFLEN];
+                ssize_t received;
+
+                while ( 0 < ( received = recv(conn->socket_fd, buffer, sizeof(buffer), 0) ) )
                 {
-                    // TODO
-                    // if bytes_sent is smaller than the bytes_read, the rest should be sent in the next try.
-                    int bytes_sent = send(conn->socket_fd, conn->buffer, bytes_read, 0);
-                    if ( -1 == bytes_sent )
-                    {
+                    printf("sock:%d, %.*s", conn->socket_fd, (int) received, buffer);
+                    fflush(stdout);
+
+                    total_bytes_in += received;
+                }
+
+                switch ( received )
+                {
+                    case -1:
                         switch ( errno )
                         {
-                            case EACCES:
-                            case EWOULDBLOCK:
-                            case EBADF:
+                            case EAGAIN:
+                                // no data available right now, try again later...
+                                break;
+
                             case ECONNRESET:
-                            case EDESTADDRREQ:
+                                // connection reset by the peer
+                                close_connection(epollfd, conn->socket_fd);
+                                conn->socket_fd = 0;
+                                conn_cnt--;
+                                break;
+
+                            case EBADF:
+                            case ECONNREFUSED:
                             case EFAULT:
                             case EINTR:
                             case EINVAL:
-                            case EISCONN:
-                            case EMSGSIZE:
-                            case ENOBUFS:
                             case ENOMEM:
                             case ENOTCONN:
                             case ENOTSOCK:
-                            case EOPNOTSUPP:
-                            case EPIPE:
                             default:
-                                fprintf(stderr, "socket send error (%d)\n", errno);
+                                fprintf(stderr, "socket recv error (%d)\n", errno);
                                 exit(1);
                         }
-                    }
+                        break;
 
-                    fprintf(stderr, "sock:%d, read:%lu, sent: %d\n", conn->socket_fd, bytes_read, bytes_sent);
+                    case 0:
+                        if ( 0 == total_bytes_in )
+                        {
+                            // The stream socket peer has performed an orderly shutdown.
+                            // recv returning 0 is a socket-closed notification.
+
+                            close_connection(epollfd, conn->socket_fd);
+                            conn->socket_fd = 0;
+                            conn_cnt--;
+                        }
                 }
-                else
+
+                // we arrive at this point
+                // if recv() returned -1 with errno == EAGAIN
+
+                if ( 0 == strncmp(buffer, "Ack\n", 4) )
                 {
-                    if ( -1 == epoll_ctl(epollfd, EPOLL_CTL_DEL, conn->socket_fd, &ev) )
+                    acknowledged = 1;
+
+                    // if this acknowledgement is after all data have been sent
+                    if ( NULL == conn->fp )
                     {
-                        switch ( errno )
+                        close_connection(epollfd, conn->socket_fd);
+                        conn->socket_fd = 0;
+                        conn_cnt--;
+                    }
+                }
+            }
+
+            if ( events[i].events & EPOLLOUT )
+            {
+                if ( NULL != conn->fp && 0 != conn->socket_fd )
+                {
+                    size_t bytes_read;
+                    bytes_read = fread(conn->buffer, sizeof(char), BUFLEN, conn->fp);
+                    if ( 0 != bytes_read )
+                    {
+                        // TODO
+                        // if bytes_sent is smaller than the bytes_read, the rest should be sent in the next try.
+                        int bytes_sent = send(conn->socket_fd, conn->buffer, bytes_read, 0);
+                        if ( -1 == bytes_sent )
                         {
-                            case EBADF:
-                            case EEXIST:
-                            case EINVAL:
-                            case ENOENT:
-                            case ENOMEM:
-                            case ENOSPC:
-                            case EPERM:
-                            default:
-                                fprintf(stderr, "epoll_ctl error (%d)\n", errno);
-                                exit(1);
+                            switch ( errno )
+                            {
+                                case EACCES:
+                                case EWOULDBLOCK:
+                                case EBADF:
+                                case ECONNRESET:
+                                case EDESTADDRREQ:
+                                case EFAULT:
+                                case EINTR:
+                                case EINVAL:
+                                case EISCONN:
+                                case EMSGSIZE:
+                                case ENOBUFS:
+                                case ENOMEM:
+                                case ENOTCONN:
+                                case ENOTSOCK:
+                                case EOPNOTSUPP:
+                                case EPIPE:
+                                default:
+                                    fprintf(stderr, "socket send error (%d)\n", errno);
+                                    exit(1);
+                            }
+                        }
+
+                        // reached to end-of-file
+                        if ( bytes_read < BUFLEN )
+                        {
+                            fclose(conn->fp);
+                            conn->fp = NULL;
+                        }
+
+                        fprintf(stderr, "sock:%d, fread:%lu, sent:%d\n", conn->socket_fd, bytes_read, bytes_sent);
+                    }
+                    else
+                    {
+                        // already end-of-file
+                        // we reach here in case the send buffer ends exactly at the end-of-file
+                        // and the end-of-file was not detected in the previous EPOLLOUT
+
+                        fclose(conn->fp);
+                        conn->fp = NULL;
+
+                        if ( 0 != acknowledged )
+                        {
+                            close_connection(epollfd, conn->socket_fd);
+                            conn->socket_fd = 0;
+                            conn_cnt--;
                         }
                     }
-
-                    if ( -1 == close(conn->socket_fd) )
-                    {
-                        switch ( errno )
-                        {
-                            case EBADF:
-                            case EINTR:
-                            case EIO:
-                            default:
-                                fprintf(stderr, "socket close error (%d)", errno);
-                                exit(1);
-                        }
-                    }
-
-                    fclose(conn->fp);
-
-                    conn->socket_fd = 0;
-                    conn->fp = 0;
-
-                    conn_cnt--;
                 }
             }
         }
