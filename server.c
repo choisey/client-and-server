@@ -19,9 +19,7 @@
 // max number of events that can be returned by epoll at a time
 #define MAX_EVENTS 20
 
-#ifdef _POSIX_C_SOURCE
 void signal_handler(int signo);
-#endif
 
 // The backlog argument defines the maximum length to which the
 // queue of pending connections for sockfd may grow. If a
@@ -31,9 +29,48 @@ void signal_handler(int signo);
 // ignored so that a later reattempt at connection succeeds.
 #define MAX_BACKLOG 3
 
-#ifdef _POSIX_C_SOURCE
 void signal_handler(int signo)
 {
+    //# Signal      Default     Comment                              POSIX
+    //  Name        Action
+    //
+    // 1 SIGHUP     Terminate   Hang up controlling terminal or      Yes
+    //                          process
+    // 2 SIGINT     Terminate   Interrupt from keyboard, Control-C   Yes
+    // 3 SIGQUIT    Dump        Quit from keyboard, Control-\        Yes
+    // 4 SIGILL     Dump        Illegal instruction                  Yes
+    // 5 SIGTRAP    Dump        Breakpoint for debugging             No
+    // 6 SIGABRT    Dump        Abnormal termination                 Yes
+    // 6 SIGIOT     Dump        Equivalent to SIGABRT                No
+    // 7 SIGBUS     Dump        Bus error                            No
+    // 8 SIGFPE     Dump        Floating-point exception             Yes
+    // 9 SIGKILL    Terminate   Forced-process termination           Yes
+    //10 SIGUSR1    Terminate   Available to processes               Yes
+    //11 SIGSEGV    Dump        Invalid memory reference             Yes
+    //12 SIGUSR2    Terminate   Available to processes               Yes
+    //13 SIGPIPE    Terminate   Write to pipe with no readers        Yes
+    //14 SIGALRM    Terminate   Real-timer clock                     Yes
+    //15 SIGTERM    Terminate   Process termination                  Yes
+    //16 SIGSTKFLT  Terminate   Coprocessor stack error              No
+    //17 SIGCHLD    Ignore      Child process stopped or terminated  Yes
+    //                          or got a signal if traced
+    //18 SIGCONT    Continue    Resume execution, if stopped         Yes
+    //19 SIGSTOP    Stop        Stop process execution, Ctrl-Z       Yes
+    //20 SIGTSTP    Stop        Stop process issued from tty         Yes
+    //21 SIGTTIN    Stop        Background process requires input    Yes
+    //22 SIGTTOU    Stop        Background process requires output   Yes
+    //23 SIGURG     Ignore      Urgent condition on socket           No
+    //24 SIGXCPU    Dump        CPU time limit exceeded              No
+    //25 SIGXFSZ    Dump        File size limit exceeded             No
+    //26 SIGVTALRM  Terminate   Virtual timer clock                  No
+    //27 SIGPROF    Terminate   Profile timer clock                  No
+    //28 SIGWINCH   Ignore      Window resizing                      No
+    //29 SIGIO      Terminate   I/O now possible                     No
+    //29 SIGPOLL    Terminate   Equivalent to SIGIO                  No
+    //30 SIGPWR     Terminate   Power supply failure                 No
+    //31 SIGSYS     Dump        Bad system call                      No
+    //31 SIGUNUSED  Dump        Equivalent to SIGSYS                 No
+
     switch ( signo )
     {
         case SIGINT:
@@ -45,7 +82,6 @@ void signal_handler(int signo)
             break;
     }
 }
-#endif
 
 // should be called when the connection is closed by the peer
 static int handle_close(int epollfd, int connfd)
@@ -94,10 +130,16 @@ int main(void)
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
 
-    sigaction(SIGINT, &sa, NULL);   // interrupted from keyboard, Ctrl-C.
+    sigaction(SIGINT,  &sa, NULL);  // interrupted from keyboard, Ctrl-C.
     sigaction(SIGTERM, &sa, NULL);  // process termination
     sigaction(SIGUSR1, &sa, NULL);  // user defined
     sigaction(SIGUSR2, &sa, NULL);  // user defined
+#else
+    // _POSIX_C_SOURCE is not defined if compiled with gcc -std=c17
+    signal(SIGINT,  signal_handler);
+    signal(SIGTERM, signal_handler);
+    signal(SIGUSR1, signal_handler);
+    signal(SIGUSR2, signal_handler);
 #endif
 
     // create a listener socket
