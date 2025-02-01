@@ -121,26 +121,10 @@ static int handle_close(int epollfd, int connfd)
 
 int main(void)
 {
-#ifdef _POSIX_C_SOURCE
-    // custom SIG handler
-    // for a graceful server shutdown
-    // Note: when compiling with -std=c17, the compiler does not recognize the sigaction structure.
-    // This is because sigaction is not part of the C standard library but is defined in POSIX. 
-    struct sigaction sa;
-    sa.sa_handler = signal_handler;
-    sigemptyset(&sa.sa_mask);
-
-    sigaction(SIGINT,  &sa, NULL);  // interrupted from keyboard, Ctrl-C.
-    sigaction(SIGTERM, &sa, NULL);  // process termination
-    sigaction(SIGUSR1, &sa, NULL);  // user defined
-    sigaction(SIGUSR2, &sa, NULL);  // user defined
-#else
-    // _POSIX_C_SOURCE is not defined if compiled with gcc -std=c17
     signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGUSR1, signal_handler);
     signal(SIGUSR2, signal_handler);
-#endif
 
     // create a listener socket
 
